@@ -1,65 +1,115 @@
 #!/usr/bin/env python3
 """
-Quick validation script for skills - minimal version
+Strict validation for skill folders.
 """
 
-import sys
-import os
+from __future__ import annotations
+
 import re
+import sys
 from pathlib import Path
 
-def validate_skill(skill_path):
-    """Basic validation of a skill"""
-    skill_path = Path(skill_path)
-    
-    # Check SKILL.md exists
-    skill_md = skill_path / 'SKILL.md'
+
+FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
+NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+OPENAI_FIELDS = ("display_name", "short_description", "default_prompt")
+
+
+def _parse_simple_yaml_block(block: str) -> dict[str, str]:
+    data: dict[str, str] = {}
+    for raw_line in block.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" not in line:
+            raise ValueError(f"Invalid YAML line: {raw_line}")
+        key, value = line.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+        if value.startswith(("'", '"')) and value.endswith(("'", '"')) and len(value) >= 2:
+            value = value[1:-1]
+        data[key] = value
+    return data
+
+
+def validate_skill(skill_path: str | Path) -> tuple[bool, str]:
+    """Validate a skill directory."""
+    skill_dir = Path(skill_path)
+
+    if not skill_dir.exists() or not skill_dir.is_dir():
+        return False, f"Skill directory not found: {skill_dir}"
+
+    skill_md = skill_dir / "SKILL.md"
     if not skill_md.exists():
         return False, "SKILL.md not found"
-    
-    # Read and validate frontmatter
-    content = skill_md.read_text()
-    if not content.startswith('---'):
-        return False, "No YAML frontmatter found"
-    
-    # Extract frontmatter
-    match = re.match(r'^---\n(.*?)\n---', content, re.DOTALL)
-    if not match:
-        return False, "Invalid frontmatter format"
-    
-    frontmatter = match.group(1)
-    
-    # Check required fields
-    if 'name:' not in frontmatter:
-        return False, "Missing 'name' in frontmatter"
-    if 'description:' not in frontmatter:
-        return False, "Missing 'description' in frontmatter"
-    
-    # Extract name for validation
-    name_match = re.search(r'name:\s*(.+)', frontmatter)
-    if name_match:
-        name = name_match.group(1).strip()
-        # Check naming convention (hyphen-case: lowercase with hyphens)
-        if not re.match(r'^[a-z0-9-]+$', name):
-            return False, f"Name '{name}' should be hyphen-case (lowercase letters, digits, and hyphens only)"
-        if name.startswith('-') or name.endswith('-') or '--' in name:
-            return False, f"Name '{name}' cannot start/end with hyphen or contain consecutive hyphens"
 
-    # Extract and validate description
-    desc_match = re.search(r'description:\s*(.+)', frontmatter)
-    if desc_match:
-        description = desc_match.group(1).strip()
-        # Check for angle brackets
-        if '<' in description or '>' in description:
-            return False, "Description cannot contain angle brackets (< or >)"
+    try:
+        content = skill_md.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return False, "SKILL.md must be valid UTF-8"
+
+    match = FRONTMATTER_RE.match(content)
+    if not match:
+        return False, "SKILL.md must start with YAML frontmatter"
+
+    try:
+        frontmatter = _parse_simple_yaml_block(match.group(1))
+    except ValueError as exc:
+        return False, str(exc)
+
+    keys = set(frontmatter.keys())
+    if keys != {"name", "description"}:
+        extra = sorted(keys - {"name", "description"})
+        missing = sorted({"name", "description"} - keys)
+        if extra:
+            return False, f"Unexpected frontmatter keys: {', '.join(extra)}"
+        return False, f"Missing frontmatter keys: {', '.join(missing)}"
+
+    name = frontmatter["name"]
+    description = frontmatter["description"]
+
+    if not NAME_RE.match(name):
+        return False, "Frontmatter name must be hyphen-case lowercase"
+    if name != skill_dir.name:
+        return False, f"Frontmatter name '{name}' must match directory name '{skill_dir.name}'"
+    if not description or len(description) > 200:
+        return False, "Description must be present and 200 characters or fewer"
+    if "<" in description or ">" in description:
+        return False, "Description cannot contain angle brackets"
+
+    agents_yaml = skill_dir / "agents" / "openai.yaml"
+    if not agents_yaml.exists():
+        return False, "agents/openai.yaml not found"
+
+    try:
+        agent_fields = _parse_simple_yaml_block(agents_yaml.read_text(encoding="utf-8"))
+    except UnicodeDecodeError:
+        return False, "agents/openai.yaml must be valid UTF-8"
+    except ValueError as exc:
+        return False, f"Invalid agents/openai.yaml: {exc}"
+
+    missing_fields = [field for field in OPENAI_FIELDS if not agent_fields.get(field)]
+    if missing_fields:
+        return False, f"agents/openai.yaml missing required fields: {', '.join(missing_fields)}"
+
+    scripts_dir = skill_dir / "scripts"
+    if scripts_dir.exists():
+        python_files = [path for path in scripts_dir.rglob("*.py") if path.is_file()]
+        if python_files and not (scripts_dir / "requirements.txt").exists():
+            return False, "scripts/requirements.txt required when Python scripts are present"
 
     return True, "Skill is valid!"
 
-if __name__ == "__main__":
+
+def main() -> int:
     if len(sys.argv) != 2:
         print("Usage: python quick_validate.py <skill_directory>")
-        sys.exit(1)
-    
+        return 1
+
     valid, message = validate_skill(sys.argv[1])
     print(message)
-    sys.exit(0 if valid else 1)
+    return 0 if valid else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
