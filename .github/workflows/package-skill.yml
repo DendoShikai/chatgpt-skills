@@ -1,0 +1,41 @@
+name: Package Skill
+
+on:
+  workflow_dispatch:
+    inputs:
+      skill_name:
+        description: 'Skill folder name'
+        required: true
+        type: string
+
+jobs:
+  package:
+    name: Package selected skill
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Create dist folder
+        run: mkdir -p dist
+
+      - name: Validate selected skill
+        run: python skill-creator/scripts/quick_validate.py "${{ github.event.inputs.skill_name }}"
+
+      - name: Package selected skill
+        run: python skill-creator/scripts/package_skill.py "${{ github.event.inputs.skill_name }}" ./dist
+
+      - name: Upload packaged skill
+        uses: actions/upload-artifact@v4
+        with:
+          name: packaged-skill
+          path: dist/
