@@ -85,7 +85,18 @@ jobs:
 
           text = readme.read_text(encoding='utf-8')
           actual = sorted(p.name for p in root.iterdir() if p.is_dir() and (p / 'SKILL.md').exists())
-          listed = re.findall(r'^- `([^`]+)`', text, flags=re.MULTILINE)
+
+          block_match = re.search(
+              r'<!-- SKILL-LIST:START -->(.*?)<!-- SKILL-LIST:END -->',
+              text,
+              flags=re.DOTALL,
+          )
+          if not block_match:
+              print('README skill catalog markers are missing.')
+              sys.exit(1)
+
+          catalog_block = block_match.group(1)
+          listed = re.findall(r'^- `([^`]+)`', catalog_block, flags=re.MULTILINE)
 
           missing = [name for name in actual if name not in listed]
           stale = [name for name in listed if name not in actual]
